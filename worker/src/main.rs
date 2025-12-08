@@ -232,60 +232,60 @@ async fn heartbeat_loop(
     }
 }
 
+
+pub async fn get_app_data(client: &reqwest::Client, app_id: &str) -> bool {
+    let body = serde_json::json!({
+        "appId": app_id,
+        "locale": "zh_CN",
+        "countryCode": "CN",
+        "orderApp": 1
+    });
+
+    let token = common::code::GLOBAL_CODE_MANAGER.get_full_token().await;
+    let response = client
+        .post("https://web-drcn.hispace.dbankcloud.com/edge/webedge/appinfo")
+        .header("Content-Type", "application/json")
+        .header("User-Agent", common::code::USER_AGENT.to_string())
+        .header("interface-code", token.interface_code)
+        .header("identity-id", token.identity_id)
+        .json(&body)
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) => resp.content_length().unwrap_or(0) > 0,
+        Err(_) => false,
+    }
+}
+
 /// 执行扫描任务
 async fn execute_task(
     config: &Config,
     task: &AcquireTaskResponse,
 ) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
-    let mut valid_ids = Vec::new();
+    let client = reqwest::Client::new();
 
     // 创建ID流
     let id_stream = futures::stream::iter(task.start_id..=task.end_id)
         .map(|id| {
-            let config = config.clone();
+            let client = client.clone();
             async move {
-                // 模拟HTTP请求（预留真实爬虫代码位置）
-                match check_id(id, &config).await {
-                    Ok(true) => {
-                        info!("Found valid ID: {}", id);
-                        Some(id)
-                    }
-                    Ok(false) => None,
-                    Err(e) => {
-                        warn!("Check ID {} failed: {}", id, e);
-                        None
-                    }
+                let app_id = format!("C{}", id);
+                let is_valid = get_app_data(&client, &app_id).await;
+                if is_valid {
+                    info!("Found valid ID: {}", id);
+                    Some(id)
+                } else {
+                    None
                 }
             }
         })
         .buffer_unordered(config.concurrency);
 
     // 收集有效ID
-    let mut stream = Box::pin(id_stream);
-    while let Some(result) = stream.next().await {
-        if let Some(id) = result {
-            valid_ids.push(id);
-        }
-    }
+    let valid_ids: Vec<i64> = id_stream.filter_map(|x| async move { x }).collect().await;
 
     Ok(valid_ids)
-}
-
-/// 占位函数：检测ID是否有效
-/// 预留位置供用户填写真实爬虫代码
-async fn check_id(id: i64, _config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
-    // TODO: 在此处填写真实的HTTP爬虫代码
-    // 示例：发送HTTP请求到目标API，检查ID是否有效
-
-    // 模拟HTTP请求耗时（50-150ms）
-    let delay_ms = 50 + (id % 100) as u64;
-    sleep(Duration::from_millis(delay_ms)).await;
-
-    // 模拟随机成功率（约1%的ID是有效的）
-    // 实际应用中，这里应该是真实的HTTP请求逻辑
-    let is_valid = id % 100 == 0;
-
-    Ok(is_valid)
 }
 
 /// 向Master提交结果

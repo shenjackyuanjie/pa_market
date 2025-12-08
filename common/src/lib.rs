@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod code;
+
 /// Worker向Master请求任务时的请求体
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcquireTaskRequest {

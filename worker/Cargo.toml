@@ -12,9 +12,9 @@ path = "src/main.rs"
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { workspace = true }
+uuid = { workspace = true }
 common = { path = "../common" }
 futures = "0.3"
-uuid = { version = "1.8", features = ["v4", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

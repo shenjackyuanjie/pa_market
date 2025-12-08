@@ -16,7 +16,7 @@ use clap::Parser;
 use common::{
     AcquireTaskRequest, AcquireTaskResponse, ApiResponse, HeartbeatRequest, SubmitResultRequest,
 };
-use sqlx::{FromRow, PgPool, PgPoolOptions};
+use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
 use std::{net::SocketAddr, sync::Arc};
 use tracing::{error, info, warn};
 use tower_http::trace::TraceLayer;
