@@ -1,0 +1,23 @@
+# Rust 编译产物
+/target/
+Cargo.lock
+**/target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 环境变量
+.env
+.env.local
+
+# 日志
+*.log
+
