@@ -6,6 +6,7 @@
 //! - HTTP探测（并发控制）
 //! - 提交结果
 
+use clap::Parser;
 use common::{
     AcquireTaskRequest, AcquireTaskResponse, ApiResponse, HeartbeatRequest, SubmitResultRequest,
 };
@@ -17,34 +18,28 @@ use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 /// Worker配置
-#[derive(Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
+#[command(author, version, about = "分布式ID扫描系统 - Worker节点", long_about = None)]
 struct Config {
     /// Master节点地址
+    #[arg(short = 'm', long, default_value = "http://localhost:3000")]
     pub master_url: String,
 
     /// 初始处理速度（req/s）
+    #[arg(short = 's', long, default_value = "100")]
     pub initial_speed: u32,
 
     /// HTTP并发数
+    #[arg(short = 'c', long, default_value = "50")]
     pub concurrency: usize,
 
     /// 心跳间隔（秒）
+    #[arg(short = 'b', long, default_value = "10")]
     pub heartbeat_interval: u64,
 
     /// 失败重试间隔（秒）
+    #[arg(short = 'r', long, default_value = "5")]
     pub retry_interval: u64,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            master_url: "http://localhost:3000".to_string(),
-            initial_speed: 100,
-            concurrency: 50,
-            heartbeat_interval: 10,
-            retry_interval: 5,
-        }
-    }
 }
 
 /// Worker状态
@@ -67,12 +62,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    // 解析命令行参数
+    let config = Config::parse();
+
     // 生成Worker ID
     let worker_id = uuid::Uuid::new_v4().to_string();
     info!("Starting Worker node, ID: {}", worker_id);
-
-    // 创建配置
-    let config = Config::default();
     info!("Master URL: {}", config.master_url);
     info!("Initial speed: {} req/s", config.initial_speed);
     info!("Concurrency: {}", config.concurrency);

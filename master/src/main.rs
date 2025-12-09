@@ -20,7 +20,6 @@ use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
 use std::{net::SocketAddr, sync::Arc};
 use tracing::{error, info, warn};
 use tower_http::trace::TraceLayer;
-use uuid::Uuid;
 
 /// Master节点配置
 #[derive(Parser, Debug)]
@@ -31,7 +30,7 @@ struct Config {
     database_url: String,
 
     /// 监听地址
-    #[arg(short = 'h', long, default_value = "0.0.0.0")]
+    #[arg(short = 'H', long, default_value = "0.0.0.0")]
     host: String,
 
     /// 监听端口
@@ -80,7 +79,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(state);
 
     // 启动服务器
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
+    let addr: SocketAddr = format!("{}:{}", config.host, config.port)
+        .parse()
+        .expect("Invalid host:port combination");
     info!("Master server listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -352,6 +353,7 @@ async fn acquire_new_task(
 
 /// 游标记录
 #[derive(FromRow)]
+#[allow(dead_code)]
 struct CursorRecord {
     id: i32,
     next_start_id: i64,
@@ -359,6 +361,7 @@ struct CursorRecord {
 
 /// 任务记录
 #[derive(FromRow)]
+#[allow(dead_code)]
 struct TaskRecord {
     task_id: i32,
     start_id: i64,
