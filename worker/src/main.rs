@@ -119,7 +119,7 @@ async fn run_worker_loop(
 
     // 3. 执行任务
     let start_time = Instant::now();
-    let valid_ids = execute_task(&config, &task).await?;
+    let valid_ids = execute_task(config, &state.client, &task).await?;
     let elapsed = start_time.elapsed();
 
     // 4. 停止心跳任务
@@ -256,9 +256,9 @@ pub async fn get_app_data(client: &reqwest::Client, app_id: &str) -> bool {
 /// 执行扫描任务
 async fn execute_task(
     config: &Config,
+    client: &reqwest::Client,
     task: &AcquireTaskResponse,
 ) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
 
     // 创建ID流
     let id_stream = futures::stream::iter(task.start_id..=task.end_id)

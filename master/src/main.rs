@@ -261,6 +261,9 @@ async fn try_acquire_task(
     let timeout_duration = Duration::seconds(60);
     let timeout_time = Utc::now() - timeout_duration;
 
+    // 开启事务，确保 FOR UPDATE SKIP LOCKED 能正常工作
+    let mut tx = pool.begin().await?;
+
     // 使用FOR UPDATE SKIP LOCKED避免多个Worker分配到同一任务
     let timeout_task = sqlx::query_as::<_, TaskRecord>(
         r#"
@@ -273,7 +276,7 @@ async fn try_acquire_task(
         "#,
     )
     .bind(timeout_time)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
     // 如果找到超时任务，分配给当前Worker
@@ -286,8 +289,11 @@ async fn try_acquire_task(
         )
         .bind(worker_id)
         .bind(task.task_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+
+        // 提交事务
+        tx.commit().await?;
 
         return Ok(Some(AcquireTaskResponse {
             task_id: task.task_id,
@@ -296,7 +302,10 @@ async fn try_acquire_task(
         }));
     }
 
-    // 没有超时任务，从global_cursor切分新范围
+    // 没有超时任务，回滚事务（实际上没有任何修改，但需要结束事务）
+    tx.rollback().await?;
+
+    // 从global_cursor切分新范围
     acquire_new_task(pool, worker_id, batch_size).await
 }
 
