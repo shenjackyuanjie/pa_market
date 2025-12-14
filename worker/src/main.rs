@@ -218,7 +218,14 @@ async fn heartbeat_loop(config: &Config, state: &Arc<WorkerState>, task_id: i32)
     }
 }
 
-pub async fn get_app_data(client: &reqwest::Client, app_id: &str) -> bool {
+
+/// 检查ID是否有效
+/// 返回值：
+/// - `Some(true)` - ID 有效
+/// - `Some(false)` - ID 无效
+/// - `None` - appId 不匹配，需要重试
+pub async fn check_id(client: &reqwest::Client, id: i64) -> Option<bool> {
+    let app_id = format!("C{}", id);
     let body = serde_json::json!({
         "appId": app_id,
         "locale": "zh_CN",
@@ -240,31 +247,29 @@ pub async fn get_app_data(client: &reqwest::Client, app_id: &str) -> bool {
     match response {
         Ok(resp) => {
             if resp.content_length().unwrap_or(0) == 0 {
-                return false;
+                return Some(false);
             }
             if let Ok(value) = resp.json::<serde_json::Value>().await {
                 if !value.is_object() {
-                    return false;
+                    return Some(false);
                 }
                 let value = value.as_object().unwrap();
                 if !value.contains_key("appId") {
-                    return false;
+                    return Some(false);
                 }
-                if !value
+                let response_app_id = value
                     .get("appId")
-                    .map(|v| v.as_str())
-                    .flatten()
-                    .map(|v| v == app_id)
-                    .unwrap_or(false)
-                {
-                    return false;
+                    .and_then(|v| v.as_str());
+                match response_app_id {
+                    Some(v) if v == app_id => Some(true),
+                    Some(_) => None, // appId 不匹配，需要重试
+                    None => Some(false),
                 }
-                true
             } else {
-                false
+                Some(false)
             }
         }
-        Err(_) => false,
+        Err(_) => Some(false),
     }
 }
 
@@ -279,13 +284,22 @@ async fn execute_task(
         .map(|id| {
             let client = client.clone();
             async move {
-                let app_id = format!("C{}", id);
-                let is_valid = get_app_data(&client, &app_id).await;
-                if is_valid {
-                    info!("发现有效ID: {}", id);
-                    Some(id)
-                } else {
-                    None
+                // 重试逻辑：当 check_id 返回 None 时重试
+                loop {
+                    match check_id(&client, id).await {
+                        Some(true) => {
+                            info!("发现有效ID: {}", id);
+                            return Some(id);
+                        }
+                        Some(false) => {
+                            return None;
+                        }
+                        None => {
+                            // appId 不匹配，需要重试
+                            warn!("ID {} 检查时 appId 不匹配，重试中...", id);
+                            continue;
+                        }
+                    }
                 }
             }
         })

@@ -84,7 +84,7 @@ impl CodeManager {
 
     /// 更新 token（内部方法）
     pub async fn update_token(&self) -> TokenInfo {
-        println!("{}", "正在刷新 token");
+        println!("正在刷新 token");
 
         let mut last_update_guard = self.last_update.write().await;
         let mut identity_id_guard = self.identity_id.write().await;
