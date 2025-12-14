@@ -5,22 +5,20 @@
 //! - 提供RESTful API供Worker调用
 //! - 智能任务分发算法（优先重试超时任务）
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::{post},
-    Router,
-};
+use axum::{extract::State, http::StatusCode, routing::post, Router};
 use chrono::{Duration, Utc};
 use clap::Parser;
 use common::{
     AcquireTaskRequest, AcquireTaskResponse, ApiResponse, HeartbeatRequest, SubmitResultRequest,
 };
-use sqlx::{FromRow, SqlitePool, sqlite::{SqlitePoolOptions, SqliteConnectOptions}};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    FromRow, SqlitePool,
+};
 use std::str::FromStr;
 use std::{net::SocketAddr, sync::Arc};
-use tracing::{error, info, warn};
 use tower_http::trace::TraceLayer;
+use tracing::{error, info, warn};
 
 /// Master节点配置
 #[derive(Parser, Debug)]
@@ -67,9 +65,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 创建数据库连接池（使用标准文件路径，自动创建文件）
     let database_url = format!("sqlite:{}", config.database_url);
-    let connect_options = SqliteConnectOptions::from_str(&database_url)?
-        .create_if_missing(true);
-    
+    let connect_options = SqliteConnectOptions::from_str(&database_url)?.create_if_missing(true);
+
     let pool = SqlitePoolOptions::new()
         .max_connections(20)
         .connect_with(connect_options)
@@ -112,18 +109,17 @@ async fn init_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "CREATE TABLE IF NOT EXISTS global_cursor (
             id INTEGER PRIMARY KEY,
             next_start_id INTEGER NOT NULL
-        )"
+        )",
     )
     .execute(pool)
     .await?;
 
     // 初始化全局游标
-    let result = sqlx::query(
-        "INSERT OR IGNORE INTO global_cursor (id, next_start_id) VALUES (1, 0)"
-    )
-    .execute(pool)
-    .await;
-    
+    let result =
+        sqlx::query("INSERT OR IGNORE INTO global_cursor (id, next_start_id) VALUES (1, 0)")
+            .execute(pool)
+            .await;
+
     match result {
         Ok(_) => info!("全局游标已初始化"),
         Err(e) => info!("全局游标已存在或出错: {}", e),
@@ -139,40 +135,36 @@ async fn init_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             status TEXT NOT NULL DEFAULT 'running',
             last_heartbeat DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )"
+        )",
     )
     .execute(pool)
     .await?;
 
     // 创建task_queue的索引
     sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_task_queue_last_heartbeat ON task_queue(last_heartbeat)"
+        "CREATE INDEX IF NOT EXISTS idx_task_queue_last_heartbeat ON task_queue(last_heartbeat)",
     )
     .execute(pool)
     .await?;
 
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_task_queue_status ON task_queue(status)"
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_task_queue_status ON task_queue(status)")
+        .execute(pool)
+        .await?;
 
     // 创建valid_results表
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS valid_results (
             id INTEGER PRIMARY KEY,
             found_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )"
+        )",
     )
     .execute(pool)
     .await?;
 
     // 创建valid_results的索引
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_valid_results_found_at ON valid_results(found_at)"
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_valid_results_found_at ON valid_results(found_at)")
+        .execute(pool)
+        .await?;
 
     Ok(())
 }
@@ -192,11 +184,11 @@ async fn acquire_task(
     // 尝试获取任务（优先分配超时任务）
     match try_acquire_task(&state.db_pool, &req.worker_id, batch_size).await {
         Ok(Some(task)) => {
-            info!("任务已分配: task_id={}, 范围=[{}, {}]", task.task_id, task.start_id, task.end_id);
-            (
-                StatusCode::OK,
-                axum::Json(ApiResponse::success(task)),
-            )
+            info!(
+                "任务已分配: task_id={}, 范围=[{}, {}]",
+                task.task_id, task.start_id, task.end_id
+            );
+            (StatusCode::OK, axum::Json(ApiResponse::success(task)))
         }
         Ok(None) => {
             warn!("没有可用的任务");
@@ -221,7 +213,10 @@ async fn heartbeat(
     State(state): State<Arc<AppState>>,
     axum::Json(req): axum::Json<HeartbeatRequest>,
 ) -> StatusCode {
-    info!("收到来自worker {} 的任务 {} 的心跳", req.worker_id, req.task_id);
+    info!(
+        "收到来自worker {} 的任务 {} 的心跳",
+        req.worker_id, req.task_id
+    );
 
     // 更新心跳时间
     let result = sqlx::query(
@@ -255,7 +250,11 @@ async fn submit_result(
     State(state): State<Arc<AppState>>,
     axum::Json(req): axum::Json<SubmitResultRequest>,
 ) -> (StatusCode, axum::Json<ApiResponse<String>>) {
-    info!("Worker提交任务 {} 的结果，发现有效ID数: {}", req.task_id, req.valid_ids.len());
+    info!(
+        "Worker提交任务 {} 的结果，发现有效ID数: {}",
+        req.task_id,
+        req.valid_ids.len()
+    );
 
     // 使用事务：写入结果 + 删除任务
     let mut tx = match state.db_pool.begin().await {
@@ -273,12 +272,10 @@ async fn submit_result(
     if !req.valid_ids.is_empty() {
         for id in &req.valid_ids {
             // 使用INSERT OR IGNORE避免重复
-            let result = sqlx::query(
-                "INSERT OR IGNORE INTO valid_results (id) VALUES (?)"
-            )
-            .bind(id)
-            .execute(&mut *tx)
-            .await;
+            let result = sqlx::query("INSERT OR IGNORE INTO valid_results (id) VALUES (?)")
+                .bind(id)
+                .execute(&mut *tx)
+                .await;
 
             if let Err(e) = result {
                 error!("插入有效ID {} 失败: {}", id, e);
@@ -315,7 +312,11 @@ async fn submit_result(
         );
     }
 
-    info!("任务 {} 提交成功，发现 {} 个有效ID", req.task_id, req.valid_ids.len());
+    info!(
+        "任务 {} 提交成功，发现 {} 个有效ID",
+        req.task_id,
+        req.valid_ids.len()
+    );
     (
         StatusCode::OK,
         axum::Json(ApiResponse::success("任务提交成功".to_string())),
@@ -368,7 +369,10 @@ async fn try_acquire_task(
 
     // 如果找到超时任务，分配给当前Worker
     if let Some(task) = timeout_task {
-        info!("发现超时任务 {}，重新分配给worker {}", task.task_id, worker_id);
+        info!(
+            "发现超时任务 {}，重新分配给worker {}",
+            task.task_id, worker_id
+        );
 
         // 更新任务的worker_id和heartbeat
         sqlx::query(
@@ -407,7 +411,7 @@ async fn acquire_new_task(
 
     // 锁定global_cursor行
     let cursor_row = sqlx::query_as::<_, CursorRecord>(
-        "SELECT id, next_start_id FROM global_cursor WHERE id = 1"
+        "SELECT id, next_start_id FROM global_cursor WHERE id = 1",
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -438,7 +442,10 @@ async fn acquire_new_task(
     // 提交事务
     tx.commit().await?;
 
-    info!("创建新任务: task_id={}, 范围=[{}, {}]", task_id, start_id, end_id);
+    info!(
+        "创建新任务: task_id={}, 范围=[{}, {}]",
+        task_id, start_id, end_id
+    );
 
     Ok(Some(AcquireTaskResponse {
         task_id,

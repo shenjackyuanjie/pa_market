@@ -20,7 +20,6 @@ pub static USER_AGENT: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-
 /// 格式化 UUID 为无连字符的小写十六进制字符串
 fn format_uuid(uuid: &uuid::Uuid) -> String {
     format!("{:x}", uuid).replace("-", "")
@@ -52,7 +51,7 @@ impl CodeManager {
     pub async fn get_token(&self) -> TokenInfo {
         let last_update = self.last_update.read().await;
 
-        if last_update.elapsed() > std::time::Duration::from_secs(60*5) {
+        if last_update.elapsed() > std::time::Duration::from_secs(60 * 5) {
             // 需要更新，释放读锁，获取写锁
             drop(last_update);
 
@@ -107,8 +106,7 @@ impl CodeManager {
 
         println!(
             "token 刷新完成\nidentity_id: {}\ninterface_code: {}",
-            identity_id_str,
-            interface_code
+            identity_id_str, interface_code
         );
 
         TokenInfo {

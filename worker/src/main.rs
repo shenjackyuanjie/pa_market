@@ -87,7 +87,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sleep(Duration::from_secs(1)).await;
             }
             Err(e) => {
-                error!("Worker循环错误: {}，在 {} 秒后重试...", e, config.retry_interval);
+                error!(
+                    "Worker循环错误: {}，在 {} 秒后重试...",
+                    e, config.retry_interval
+                );
                 sleep(Duration::from_secs(config.retry_interval)).await;
             }
         }
@@ -184,17 +187,11 @@ async fn acquire_task(
             .into());
     }
 
-    response
-        .data
-        .ok_or_else(|| "没有任务数据".into())
+    response.data.ok_or_else(|| "没有任务数据".into())
 }
 
 /// 后台心跳循环
-async fn heartbeat_loop(
-    config: &Config,
-    state: &Arc<WorkerState>,
-    task_id: i32,
-) {
+async fn heartbeat_loop(config: &Config, state: &Arc<WorkerState>, task_id: i32) {
     let interval = Duration::from_secs(config.heartbeat_interval);
 
     loop {
@@ -206,13 +203,7 @@ async fn heartbeat_loop(
         };
 
         let url = format!("{}/task/heartbeat", config.master_url);
-        match state
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-        {
+        match state.client.post(&url).json(&request).send().await {
             Ok(resp) => {
                 if resp.status().is_success() {
                     info!("任务 {} 的心跳已发送", task_id);
@@ -226,7 +217,6 @@ async fn heartbeat_loop(
         }
     }
 }
-
 
 pub async fn get_app_data(client: &reqwest::Client, app_id: &str) -> bool {
     let body = serde_json::json!({
@@ -259,7 +249,6 @@ async fn execute_task(
     client: &reqwest::Client,
     task: &AcquireTaskResponse,
 ) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
-
     // 创建ID流
     let id_stream = futures::stream::iter(task.start_id..=task.end_id)
         .map(|id| {

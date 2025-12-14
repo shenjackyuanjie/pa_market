@@ -2,7 +2,7 @@
 //! 用于管理任务队列的初始化和重置
 
 use clap::{Parser, Subcommand};
-use sqlx::sqlite::{SqlitePoolOptions, SqliteConnectOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::str::FromStr;
 use tracing::info;
 
@@ -25,7 +25,7 @@ struct Cli {
 enum Commands {
     /// 初始化数据库（创建表）
     InitDb,
-    
+
     /// 设置全局游标位置
     #[command(about = "设置扫描起始 ID")]
     SetCursor {
@@ -69,9 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 创建数据库连接池（使用标准文件路径，自动创建文件）
     let database_url = format!("sqlite:{}", cli.database_url);
-    let connect_options = SqliteConnectOptions::from_str(&database_url)?
-        .create_if_missing(true);
-    
+    let connect_options = SqliteConnectOptions::from_str(&database_url)?.create_if_missing(true);
+
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(connect_options)
@@ -102,17 +101,15 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), Box<dyn std::error::Erro
         "CREATE TABLE IF NOT EXISTS global_cursor (
             id INTEGER PRIMARY KEY,
             next_start_id INTEGER NOT NULL
-        )"
+        )",
     )
     .execute(pool)
     .await?;
 
     // 初始化全局游标
-    sqlx::query(
-        "INSERT OR IGNORE INTO global_cursor (id, next_start_id) VALUES (1, 0)"
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT OR IGNORE INTO global_cursor (id, next_start_id) VALUES (1, 0)")
+        .execute(pool)
+        .await?;
 
     // 创建 task_queue 表
     sqlx::query(
@@ -124,47 +121,46 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), Box<dyn std::error::Erro
             status TEXT NOT NULL DEFAULT 'running',
             last_heartbeat DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )"
+        )",
     )
     .execute(pool)
     .await?;
 
     // 创建索引
     sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_task_queue_last_heartbeat ON task_queue(last_heartbeat)"
+        "CREATE INDEX IF NOT EXISTS idx_task_queue_last_heartbeat ON task_queue(last_heartbeat)",
     )
     .execute(pool)
     .await?;
 
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_task_queue_status ON task_queue(status)"
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_task_queue_status ON task_queue(status)")
+        .execute(pool)
+        .await?;
 
     // 创建 valid_results 表
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS valid_results (
             id INTEGER PRIMARY KEY,
             found_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )"
+        )",
     )
     .execute(pool)
     .await?;
 
     // 创建索引
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_valid_results_found_at ON valid_results(found_at)"
-    )
-    .execute(pool)
-    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_valid_results_found_at ON valid_results(found_at)")
+        .execute(pool)
+        .await?;
 
     info!("数据库初始化成功");
     Ok(())
 }
 
 /// 设置全局游标
-async fn set_cursor(pool: &sqlx::SqlitePool, start_id: i64) -> Result<(), Box<dyn std::error::Error>> {
+async fn set_cursor(
+    pool: &sqlx::SqlitePool,
+    start_id: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
     info!("设置游标位置: {}", start_id);
 
     sqlx::query("UPDATE global_cursor SET next_start_id = ? WHERE id = 1")
@@ -184,9 +180,7 @@ async fn reset_queue(pool: &sqlx::SqlitePool) -> Result<(), Box<dyn std::error::
         .fetch_one(pool)
         .await?;
 
-    sqlx::query("DELETE FROM task_queue")
-        .execute(pool)
-        .await?;
+    sqlx::query("DELETE FROM task_queue").execute(pool).await?;
 
     info!("✓ 任务队列已清空 (删除了 {} 个任务)", count);
     Ok(())
@@ -204,9 +198,10 @@ async fn show_status(pool: &sqlx::SqlitePool) -> Result<(), Box<dyn std::error::
         .fetch_one(pool)
         .await?;
 
-    let running_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM task_queue WHERE status = 'running'")
-        .fetch_one(pool)
-        .await?;
+    let running_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM task_queue WHERE status = 'running'")
+            .fetch_one(pool)
+            .await?;
 
     // 获取已扫描的结果数
     let result_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM valid_results")
@@ -235,9 +230,13 @@ async fn clear_all(pool: &sqlx::SqlitePool, force: bool) -> Result<(), Box<dyn s
 
     info!("清空所有数据...");
 
-    sqlx::query("DELETE FROM valid_results").execute(pool).await?;
+    sqlx::query("DELETE FROM valid_results")
+        .execute(pool)
+        .await?;
     sqlx::query("DELETE FROM task_queue").execute(pool).await?;
-    sqlx::query("UPDATE global_cursor SET next_start_id = 0 WHERE id = 1").execute(pool).await?;
+    sqlx::query("UPDATE global_cursor SET next_start_id = 0 WHERE id = 1")
+        .execute(pool)
+        .await?;
 
     info!("✓ 所有数据已成功清空");
     Ok(())
