@@ -238,7 +238,7 @@ pub async fn get_app_data(client: &reqwest::Client, app_id: &str) -> bool {
         .await;
 
     match response {
-        Ok(resp) => resp.content_length().unwrap_or(0) > 0,
+        Ok(resp) => resp.content_length().unwrap_or(0) > 0 && resp.json::<serde_json::Value>().await.is_ok(),
         Err(_) => false,
     }
 }
