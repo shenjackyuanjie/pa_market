@@ -388,16 +388,23 @@ async fn execute_task(
     let client = &state.client;
     let force_shutdown = Arc::clone(&state.force_shutdown);
 
+    // 任务级别的重试计数器
+    let task_retry_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
     // 创建ID流
     let id_stream = futures::stream::iter(task.start_id..=task.end_id)
         .map(|id| {
             let client = client.clone();
             let force_shutdown = Arc::clone(&force_shutdown);
+            let task_retry_count = Arc::clone(&task_retry_count);
             async move {
                 // 检查是否需要强制退出
                 if force_shutdown.load(Ordering::SeqCst) {
                     return None;
                 }
+
+                // 单个ID的重试计数
+                let mut id_retry_count: u32 = 0;
 
                 // 重试逻辑：当 check_id 返回 None 时重试
                 loop {
@@ -416,7 +423,9 @@ async fn execute_task(
                         }
                         None => {
                             // appId 不匹配，需要重试
-                            warn!("ID {} 检查时 appId 不匹配，重试中...", id);
+                            id_retry_count += 1;
+                            task_retry_count.fetch_add(1, Ordering::SeqCst);
+                            warn!("ID {} 检查时 appId 不匹配，第 {} 次重试...", id, id_retry_count);
                             continue;
                         }
                     }
@@ -427,6 +436,12 @@ async fn execute_task(
 
     // 收集有效ID
     let valid_ids: Vec<i64> = id_stream.filter_map(|x| async move { x }).collect().await;
+
+    // 输出任务总重试次数
+    let total_retries = task_retry_count.load(Ordering::SeqCst);
+    if total_retries > 0 {
+        info!("任务 {} 完成，总重试次数: {}", task.task_id, total_retries);
+    }
 
     Ok(valid_ids)
 }
