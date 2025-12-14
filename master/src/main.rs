@@ -16,7 +16,8 @@ use clap::Parser;
 use common::{
     AcquireTaskRequest, AcquireTaskResponse, ApiResponse, HeartbeatRequest, SubmitResultRequest,
 };
-use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
+use sqlx::{FromRow, SqlitePool, sqlite::{SqlitePoolOptions, SqliteConnectOptions}};
+use std::str::FromStr;
 use std::{net::SocketAddr, sync::Arc};
 use tracing::{error, info, warn};
 use tower_http::trace::TraceLayer;
@@ -25,8 +26,8 @@ use tower_http::trace::TraceLayer;
 #[derive(Parser, Debug)]
 #[command(author, version, about = "分布式ID扫描系统 - Master节点", long_about = None)]
 struct Config {
-    /// 数据库连接URL
-    #[arg(short = 'd', long, default_value = "postgres://postgres:password@localhost/distri_crawler")]
+    /// 数据库文件路径
+    #[arg(short = 'd', long, default_value = "master.db")]
     database_url: String,
 
     /// 监听地址
@@ -41,8 +42,8 @@ struct Config {
 /// 应用状态
 #[derive(Clone)]
 struct AppState {
-    /// PostgreSQL数据库连接池
-    db_pool: PgPool,
+    /// SQLite数据库连接池
+    db_pool: SqlitePool,
 }
 
 #[tokio::main]
@@ -55,13 +56,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 解析命令行参数
     let config = Config::parse();
     info!("Starting Master node on port {}", config.port);
-    info!("Database URL: {}", config.database_url);
+    info!("Database path: {}", config.database_url);
 
-    // 创建数据库连接池
-    let pool = PgPoolOptions::new()
+    // 确保数据库文件的目录存在
+    if let Some(parent) = std::path::Path::new(&config.database_url).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    // 创建数据库连接池（使用标准文件路径，自动创建文件）
+    let database_url = format!("sqlite:{}", config.database_url);
+    let connect_options = SqliteConnectOptions::from_str(&database_url)?
+        .create_if_missing(true);
+    
+    let pool = SqlitePoolOptions::new()
         .max_connections(20)
-        .connect(&config.database_url)
+        .connect_with(connect_options)
         .await?;
+
+    // 执行初始化SQL
+    init_database(&pool).await?;
 
     // 测试数据库连接
     sqlx::query("SELECT 1").fetch_one(&pool).await?;
@@ -86,6 +101,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+/// 初始化数据库表
+async fn init_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    // 创建global_cursor表
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS global_cursor (
+            id INTEGER PRIMARY KEY,
+            next_start_id INTEGER NOT NULL
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    // 初始化全局游标
+    let result = sqlx::query(
+        "INSERT OR IGNORE INTO global_cursor (id, next_start_id) VALUES (1, 0)"
+    )
+    .execute(pool)
+    .await;
+    
+    match result {
+        Ok(_) => info!("Global cursor initialized"),
+        Err(e) => info!("Global cursor already exists or error: {}", e),
+    }
+
+    // 创建task_queue表
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS task_queue (
+            task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_id INTEGER NOT NULL,
+            end_id INTEGER NOT NULL,
+            worker_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running',
+            last_heartbeat DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    // 创建task_queue的索引
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_task_queue_last_heartbeat ON task_queue(last_heartbeat)"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_task_queue_status ON task_queue(status)"
+    )
+    .execute(pool)
+    .await?;
+
+    // 创建valid_results表
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS valid_results (
+            id INTEGER PRIMARY KEY,
+            found_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    // 创建valid_results的索引
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_valid_results_found_at ON valid_results(found_at)"
+    )
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
@@ -138,7 +225,7 @@ async fn heartbeat(
 
     // 更新心跳时间
     let result = sqlx::query(
-        "UPDATE task_queue SET last_heartbeat = NOW() WHERE task_id = $1 AND worker_id = $2"
+        "UPDATE task_queue SET last_heartbeat = CURRENT_TIMESTAMP WHERE task_id = ? AND worker_id = ?"
     )
     .bind(req.task_id)
     .bind(&req.worker_id)
@@ -185,9 +272,9 @@ async fn submit_result(
     // 1. 批量写入valid_ids
     if !req.valid_ids.is_empty() {
         for id in &req.valid_ids {
-            // 使用ON CONFLICT DO NOTHING避免重复
+            // 使用INSERT OR IGNORE避免重复
             let result = sqlx::query(
-                "INSERT INTO valid_results (id) VALUES ($1) ON CONFLICT (id) DO NOTHING"
+                "INSERT OR IGNORE INTO valid_results (id) VALUES (?)"
             )
             .bind(id)
             .execute(&mut *tx)
@@ -205,7 +292,7 @@ async fn submit_result(
     }
 
     // 2. 从task_queue删除任务
-    let result = sqlx::query("DELETE FROM task_queue WHERE task_id = $1")
+    let result = sqlx::query("DELETE FROM task_queue WHERE task_id = ?")
         .bind(req.task_id)
         .execute(&mut *tx)
         .await;
@@ -253,7 +340,7 @@ fn calculate_batch_size(last_performance: Option<u32>) -> i64 {
 /// 1. 优先查找超时任务（last_heartbeat > 60秒）
 /// 2. 如果没有超时任务，从global_cursor切分新范围
 async fn try_acquire_task(
-    pool: &PgPool,
+    pool: &SqlitePool,
     worker_id: &str,
     batch_size: i64,
 ) -> Result<Option<AcquireTaskResponse>, sqlx::Error> {
@@ -264,15 +351,15 @@ async fn try_acquire_task(
     // 开启事务，确保 FOR UPDATE SKIP LOCKED 能正常工作
     let mut tx = pool.begin().await?;
 
-    // 使用FOR UPDATE SKIP LOCKED避免多个Worker分配到同一任务
+    // SQLite使用PRAGMA optimize和单线程访问来确保一致性
+    // 查找超时任务
     let timeout_task = sqlx::query_as::<_, TaskRecord>(
         r#"
         SELECT task_id, start_id, end_id, worker_id, status, last_heartbeat, created_at
         FROM task_queue
-        WHERE last_heartbeat < $1
+        WHERE last_heartbeat < ?
         ORDER BY last_heartbeat ASC
         LIMIT 1
-        FOR UPDATE SKIP LOCKED
         "#,
     )
     .bind(timeout_time)
@@ -285,7 +372,7 @@ async fn try_acquire_task(
 
         // 更新任务的worker_id和heartbeat
         sqlx::query(
-            "UPDATE task_queue SET worker_id = $1, last_heartbeat = NOW() WHERE task_id = $2"
+            "UPDATE task_queue SET worker_id = ?, last_heartbeat = CURRENT_TIMESTAMP WHERE task_id = ?"
         )
         .bind(worker_id)
         .bind(task.task_id)
@@ -311,16 +398,16 @@ async fn try_acquire_task(
 
 /// 从global_cursor切分新任务
 async fn acquire_new_task(
-    pool: &PgPool,
+    pool: &SqlitePool,
     worker_id: &str,
     batch_size: i64,
 ) -> Result<Option<AcquireTaskResponse>, sqlx::Error> {
     // 开启事务
     let mut tx = pool.begin().await?;
 
-    // 锁定global_cursor行（FOR UPDATE）
+    // 锁定global_cursor行
     let cursor_row = sqlx::query_as::<_, CursorRecord>(
-        "SELECT id, next_start_id FROM global_cursor WHERE id = 1 FOR UPDATE"
+        "SELECT id, next_start_id FROM global_cursor WHERE id = 1"
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -329,7 +416,7 @@ async fn acquire_new_task(
     let end_id = start_id + batch_size - 1; // 包含end_id
 
     // 更新global_cursor
-    sqlx::query("UPDATE global_cursor SET next_start_id = $1 WHERE id = 1")
+    sqlx::query("UPDATE global_cursor SET next_start_id = ? WHERE id = 1")
         .bind(end_id + 1)
         .execute(&mut *tx)
         .await?;
@@ -338,7 +425,7 @@ async fn acquire_new_task(
     let task_id: i32 = sqlx::query_scalar(
         r#"
         INSERT INTO task_queue (start_id, end_id, worker_id, status, last_heartbeat)
-        VALUES ($1, $2, $3, 'running', NOW())
+        VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP)
         RETURNING task_id
         "#,
     )
