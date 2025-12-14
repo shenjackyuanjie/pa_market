@@ -6,7 +6,7 @@
 //! - 智能任务分发算法（优先重试超时任务）
 
 use axum::{extract::State, http::StatusCode, routing::post, Router};
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use clap::Parser;
 use common::{
     AcquireTaskRequest, AcquireTaskResponse, ApiResponse, HeartbeatRequest, SubmitResultRequest,
@@ -218,9 +218,34 @@ async fn heartbeat(
         req.worker_id, req.task_id
     );
 
+    // 先查询任务当前状态，用于调试
+    let task_info: Option<(String, String)> = sqlx::query_as(
+        "SELECT worker_id, last_heartbeat FROM task_queue WHERE task_id = ?"
+    )
+    .bind(req.task_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some((current_worker_id, last_heartbeat)) = &task_info {
+        info!(
+            "任务 {} 当前状态: worker_id={}, last_heartbeat={}",
+            req.task_id, current_worker_id, last_heartbeat
+        );
+        if current_worker_id != &req.worker_id {
+            warn!(
+                "Worker ID不匹配! 请求的worker_id={}, 数据库中的worker_id={}",
+                req.worker_id, current_worker_id
+            );
+        }
+    } else {
+        warn!("任务 {} 在数据库中不存在", req.task_id);
+    }
+
     // 更新心跳时间
     let result = sqlx::query(
-        "UPDATE task_queue SET last_heartbeat = CURRENT_TIMESTAMP WHERE task_id = ? AND worker_id = ?"
+        "UPDATE task_queue SET last_heartbeat = datetime('now') WHERE task_id = ? AND worker_id = ?"
     )
     .bind(req.task_id)
     .bind(&req.worker_id)
@@ -233,7 +258,7 @@ async fn heartbeat(
                 info!("任务 {} 的心跳已更新", req.task_id);
                 StatusCode::OK
             } else {
-                warn!("任务 {} 不存在或Worker不匹配", req.task_id);
+                warn!("任务 {} 不存在或Worker不匹配 (rows_affected=0)", req.task_id);
                 StatusCode::NOT_FOUND
             }
         }
@@ -345,38 +370,34 @@ async fn try_acquire_task(
     worker_id: &str,
     batch_size: i64,
 ) -> Result<Option<AcquireTaskResponse>, sqlx::Error> {
-    // 查找超时任务（60秒未更新心跳）
-    let timeout_duration = Duration::seconds(60);
-    let timeout_time = Utc::now() - timeout_duration;
-
     // 开启事务，确保 FOR UPDATE SKIP LOCKED 能正常工作
     let mut tx = pool.begin().await?;
 
-    // SQLite使用PRAGMA optimize和单线程访问来确保一致性
-    // 查找超时任务
+    // 查找超时任务（60秒未更新心跳）
+    // 使用SQLite内置函数datetime计算超时时间，确保时间格式一致
+    // CURRENT_TIMESTAMP和datetime都使用SQLite的UTC时间
     let timeout_task = sqlx::query_as::<_, TaskRecord>(
         r#"
         SELECT task_id, start_id, end_id, worker_id, status, last_heartbeat, created_at
         FROM task_queue
-        WHERE last_heartbeat < ?
+        WHERE last_heartbeat < datetime('now', '-60 seconds')
         ORDER BY last_heartbeat ASC
         LIMIT 1
         "#,
     )
-    .bind(timeout_time)
     .fetch_optional(&mut *tx)
     .await?;
 
     // 如果找到超时任务，分配给当前Worker
     if let Some(task) = timeout_task {
-        info!(
-            "发现超时任务 {}，重新分配给worker {}",
-            task.task_id, worker_id
+        warn!(
+            "发现超时任务 {}: 原worker={}, last_heartbeat={}, 现在重新分配给worker {}",
+            task.task_id, task.worker_id, task.last_heartbeat, worker_id
         );
 
         // 更新任务的worker_id和heartbeat
         sqlx::query(
-            "UPDATE task_queue SET worker_id = ?, last_heartbeat = CURRENT_TIMESTAMP WHERE task_id = ?"
+            "UPDATE task_queue SET worker_id = ?, last_heartbeat = datetime('now') WHERE task_id = ?"
         )
         .bind(worker_id)
         .bind(task.task_id)
@@ -429,7 +450,7 @@ async fn acquire_new_task(
     let task_id: i32 = sqlx::query_scalar(
         r#"
         INSERT INTO task_queue (start_id, end_id, worker_id, status, last_heartbeat)
-        VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, 'running', datetime('now'))
         RETURNING task_id
         "#,
     )
