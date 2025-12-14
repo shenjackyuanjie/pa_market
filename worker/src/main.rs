@@ -238,7 +238,32 @@ pub async fn get_app_data(client: &reqwest::Client, app_id: &str) -> bool {
         .await;
 
     match response {
-        Ok(resp) => resp.content_length().unwrap_or(0) > 0 && resp.json::<serde_json::Value>().await.is_ok(),
+        Ok(resp) => {
+            if resp.content_length().unwrap_or(0) == 0 {
+                return false;
+            }
+            if let Ok(value) = resp.json::<serde_json::Value>().await {
+                if !value.is_object() {
+                    return false;
+                }
+                let value = value.as_object().unwrap();
+                if !value.contains_key("appId") {
+                    return false;
+                }
+                if !value
+                    .get("appId")
+                    .map(|v| v.as_str())
+                    .flatten()
+                    .map(|v| v == app_id)
+                    .unwrap_or(false)
+                {
+                    return false;
+                }
+                true
+            } else {
+                false
+            }
+        }
         Err(_) => false,
     }
 }
