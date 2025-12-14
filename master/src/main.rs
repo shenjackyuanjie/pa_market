@@ -55,8 +55,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 解析命令行参数
     let config = Config::parse();
-    info!("Starting Master node on port {}", config.port);
-    info!("Database path: {}", config.database_url);
+    info!("启动Master节点，端口: {}", config.port);
+    info!("数据库路径: {}", config.database_url);
 
     // 确保数据库文件的目录存在
     if let Some(parent) = std::path::Path::new(&config.database_url).parent() {
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 测试数据库连接
     sqlx::query("SELECT 1").fetch_one(&pool).await?;
-    info!("Database connected successfully");
+    info!("数据库连接成功");
 
     // 创建应用状态
     let state = Arc::new(AppState { db_pool: pool });
@@ -96,8 +96,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 启动服务器
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
         .parse()
-        .expect("Invalid host:port combination");
-    info!("Master server listening on http://{}", addr);
+        .expect("无效的主机:端口组合");
+    info!("Master服务器监听在 http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
@@ -125,8 +125,8 @@ async fn init_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await;
     
     match result {
-        Ok(_) => info!("Global cursor initialized"),
-        Err(e) => info!("Global cursor already exists or error: {}", e),
+        Ok(_) => info!("全局游标已初始化"),
+        Err(e) => info!("全局游标已存在或出错: {}", e),
     }
 
     // 创建task_queue表
@@ -183,33 +183,33 @@ async fn acquire_task(
     State(state): State<Arc<AppState>>,
     axum::Json(req): axum::Json<AcquireTaskRequest>,
 ) -> (StatusCode, axum::Json<ApiResponse<AcquireTaskResponse>>) {
-    info!("Worker {} acquiring task", req.worker_id);
+    info!("Worker {} 请求任务", req.worker_id);
 
     // 计算batch_size（基于last_performance）
     let batch_size = calculate_batch_size(req.last_performance);
-    info!("Calculated batch_size: {}", batch_size);
+    info!("计算得到的batch_size: {}", batch_size);
 
     // 尝试获取任务（优先分配超时任务）
     match try_acquire_task(&state.db_pool, &req.worker_id, batch_size).await {
         Ok(Some(task)) => {
-            info!("Task acquired: task_id={}, range=[{}, {}]", task.task_id, task.start_id, task.end_id);
+            info!("任务已分配: task_id={}, 范围=[{}, {}]", task.task_id, task.start_id, task.end_id);
             (
                 StatusCode::OK,
                 axum::Json(ApiResponse::success(task)),
             )
         }
         Ok(None) => {
-            warn!("No task available");
+            warn!("没有可用的任务");
             (
                 StatusCode::OK,
-                axum::Json(ApiResponse::error("No task available".to_string())),
+                axum::Json(ApiResponse::error("没有可用的任务".to_string())),
             )
         }
         Err(e) => {
-            error!("Failed to acquire task: {}", e);
+            error!("获取任务失败: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(ApiResponse::error(format!("Database error: {}", e))),
+                axum::Json(ApiResponse::error(format!("数据库错误: {}", e))),
             )
         }
     }
@@ -221,7 +221,7 @@ async fn heartbeat(
     State(state): State<Arc<AppState>>,
     axum::Json(req): axum::Json<HeartbeatRequest>,
 ) -> StatusCode {
-    info!("Heartbeat from worker {} for task {}", req.worker_id, req.task_id);
+    info!("收到来自worker {} 的任务 {} 的心跳", req.worker_id, req.task_id);
 
     // 更新心跳时间
     let result = sqlx::query(
@@ -235,15 +235,15 @@ async fn heartbeat(
     match result {
         Ok(res) => {
             if res.rows_affected() > 0 {
-                info!("Heartbeat updated for task {}", req.task_id);
+                info!("任务 {} 的心跳已更新", req.task_id);
                 StatusCode::OK
             } else {
-                warn!("Task {} not found or worker mismatch", req.task_id);
+                warn!("任务 {} 不存在或Worker不匹配", req.task_id);
                 StatusCode::NOT_FOUND
             }
         }
         Err(e) => {
-            error!("Failed to update heartbeat: {}", e);
+            error!("更新心跳失败: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
@@ -255,16 +255,16 @@ async fn submit_result(
     State(state): State<Arc<AppState>>,
     axum::Json(req): axum::Json<SubmitResultRequest>,
 ) -> (StatusCode, axum::Json<ApiResponse<String>>) {
-    info!("Worker submitting result for task {}, valid_ids: {}", req.task_id, req.valid_ids.len());
+    info!("Worker提交任务 {} 的结果，发现有效ID数: {}", req.task_id, req.valid_ids.len());
 
     // 使用事务：写入结果 + 删除任务
     let mut tx = match state.db_pool.begin().await {
         Ok(t) => t,
         Err(e) => {
-            error!("Failed to start transaction: {}", e);
+            error!("启动事务失败: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(ApiResponse::error(format!("Transaction error: {}", e))),
+                axum::Json(ApiResponse::error(format!("事务错误: {}", e))),
             );
         }
     };
@@ -281,11 +281,11 @@ async fn submit_result(
             .await;
 
             if let Err(e) = result {
-                error!("Failed to insert valid_id {}: {}", id, e);
+                error!("插入有效ID {} 失败: {}", id, e);
                 let _ = tx.rollback().await;
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    axum::Json(ApiResponse::error(format!("Insert error: {}", e))),
+                    axum::Json(ApiResponse::error(format!("插入错误: {}", e))),
                 );
             }
         }
@@ -298,27 +298,27 @@ async fn submit_result(
         .await;
 
     if let Err(e) = result {
-        error!("Failed to delete task {}: {}", req.task_id, e);
+        error!("删除任务 {} 失败: {}", req.task_id, e);
         let _ = tx.rollback().await;
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(ApiResponse::error(format!("Delete error: {}", e))),
+            axum::Json(ApiResponse::error(format!("删除错误: {}", e))),
         );
     }
 
     // 提交事务
     if let Err(e) = tx.commit().await {
-        error!("Failed to commit transaction: {}", e);
+        error!("提交事务失败: {}", e);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(ApiResponse::error(format!("Commit error: {}", e))),
+            axum::Json(ApiResponse::error(format!("提交错误: {}", e))),
         );
     }
 
-    info!("Task {} submitted successfully, {} valid ids", req.task_id, req.valid_ids.len());
+    info!("任务 {} 提交成功，发现 {} 个有效ID", req.task_id, req.valid_ids.len());
     (
         StatusCode::OK,
-        axum::Json(ApiResponse::success("Task submitted successfully".to_string())),
+        axum::Json(ApiResponse::success("任务提交成功".to_string())),
     )
 }
 
@@ -368,7 +368,7 @@ async fn try_acquire_task(
 
     // 如果找到超时任务，分配给当前Worker
     if let Some(task) = timeout_task {
-        info!("Found timeout task {}, reassigning to worker {}", task.task_id, worker_id);
+        info!("发现超时任务 {}，重新分配给worker {}", task.task_id, worker_id);
 
         // 更新任务的worker_id和heartbeat
         sqlx::query(
@@ -438,7 +438,7 @@ async fn acquire_new_task(
     // 提交事务
     tx.commit().await?;
 
-    info!("Created new task: task_id={}, range=[{}, {}]", task_id, start_id, end_id);
+    info!("创建新任务: task_id={}, 范围=[{}, {}]", task_id, start_id, end_id);
 
     Ok(Some(AcquireTaskResponse {
         task_id,

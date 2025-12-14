@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 解析命令行参数
     let cli = Cli::parse();
-    info!("Connecting to database: {}", cli.database_url);
+    info!("连接到数据库: {}", cli.database_url);
 
     // 确保数据库文件的目录存在
     if let Some(parent) = std::path::Path::new(&cli.database_url).parent() {
@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 测试连接
     sqlx::query("SELECT 1").fetch_one(&pool).await?;
-    info!("Database connection successful");
+    info!("数据库连接成功");
 
     // 执行相应的命令
     match cli.command {
@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// 初始化数据库
 async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Initializing database...");
+    info!("初始化数据库...");
 
     // 创建 global_cursor 表
     sqlx::query(
@@ -159,26 +159,26 @@ async fn init_db(pool: &sqlx::SqlitePool) -> Result<(), Box<dyn std::error::Erro
     .execute(pool)
     .await?;
 
-    info!("Database initialized successfully");
+    info!("数据库初始化成功");
     Ok(())
 }
 
 /// 设置全局游标
 async fn set_cursor(pool: &sqlx::SqlitePool, start_id: i64) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Setting cursor to: {}", start_id);
+    info!("设置游标位置: {}", start_id);
 
     sqlx::query("UPDATE global_cursor SET next_start_id = ? WHERE id = 1")
         .bind(start_id)
         .execute(pool)
         .await?;
 
-    info!("✓ Cursor updated to {}", start_id);
+    info!("✓ 游标已更新为 {}", start_id);
     Ok(())
 }
 
 /// 重置任务队列
 async fn reset_queue(pool: &sqlx::SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Resetting task queue...");
+    info!("重置任务队列...");
 
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM task_queue")
         .fetch_one(pool)
@@ -188,7 +188,7 @@ async fn reset_queue(pool: &sqlx::SqlitePool) -> Result<(), Box<dyn std::error::
         .execute(pool)
         .await?;
 
-    info!("✓ Task queue cleared ({} tasks deleted)", count);
+    info!("✓ 任务队列已清空 (删除了 {} 个任务)", count);
     Ok(())
 }
 
@@ -233,12 +233,12 @@ async fn clear_all(pool: &sqlx::SqlitePool, force: bool) -> Result<(), Box<dyn s
         std::process::exit(1);
     }
 
-    info!("Clearing all data...");
+    info!("清空所有数据...");
 
     sqlx::query("DELETE FROM valid_results").execute(pool).await?;
     sqlx::query("DELETE FROM task_queue").execute(pool).await?;
     sqlx::query("UPDATE global_cursor SET next_start_id = 0 WHERE id = 1").execute(pool).await?;
 
-    info!("✓ All data cleared successfully");
+    info!("✓ 所有数据已成功清空");
     Ok(())
 }

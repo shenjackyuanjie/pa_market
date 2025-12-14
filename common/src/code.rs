@@ -30,7 +30,7 @@ pub static GLOBAL_CODE_MANAGER: LazyLock<CodeManager> = LazyLock::new(|| {
     let now = Instant::now();
     let client = reqwest::ClientBuilder::new()
         .build()
-        .expect("failed to build client");
+        .expect("构建HTTP客户端失败");
 
     CodeManager {
         identity_id: RwLock::new(uuid::Uuid::new_v4()),
@@ -78,7 +78,7 @@ impl CodeManager {
     /// 获取完整的 token（包含 unix time）
     pub async fn get_full_token(&self) -> TokenInfo {
         let mut token_info = self.get_token().await;
-        let unix_time: u64 = UNIX_EPOCH.elapsed().expect("wtf").as_millis() as u64;
+        let unix_time: u64 = UNIX_EPOCH.elapsed().expect("系统时间异常").as_millis() as u64;
         token_info.interface_code = format!("{}_{unix_time}", token_info.interface_code);
         token_info
     }
@@ -126,7 +126,7 @@ impl CodeManager {
                 panic!("达到最大重试次数，无法获取 interface_code");
             }
 
-            let unix_time: u64 = UNIX_EPOCH.elapsed().expect("wtf").as_millis() as u64;
+            let unix_time: u64 = UNIX_EPOCH.elapsed().expect("系统时间异常").as_millis() as u64;
 
             let response_result = self
                 .client

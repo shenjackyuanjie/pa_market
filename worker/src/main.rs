@@ -67,10 +67,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 生成Worker ID
     let worker_id = uuid::Uuid::new_v4().to_string();
-    info!("Starting Worker node, ID: {}", worker_id);
-    info!("Master URL: {}", config.master_url);
-    info!("Initial speed: {} req/s", config.initial_speed);
-    info!("Concurrency: {}", config.concurrency);
+    info!("启动Worker节点，ID: {}", worker_id);
+    info!("Master地址: {}", config.master_url);
+    info!("初始速度: {} req/s", config.initial_speed);
+    info!("并发数: {}", config.concurrency);
 
     // 创建Worker状态
     let state = Arc::new(WorkerState {
@@ -83,11 +83,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match run_worker_loop(&config, &state).await {
             Ok(_) => {
-                info!("Task completed, waiting before next task...");
+                info!("任务完成，等待下一个任务...");
                 sleep(Duration::from_secs(1)).await;
             }
             Err(e) => {
-                error!("Worker loop error: {}, retrying in {} seconds...", e, config.retry_interval);
+                error!("Worker循环错误: {}，在 {} 秒后重试...", e, config.retry_interval);
                 sleep(Duration::from_secs(config.retry_interval)).await;
             }
         }
@@ -102,7 +102,7 @@ async fn run_worker_loop(
     // 1. 获取任务
     let task = acquire_task(config, state).await?;
     info!(
-        "Task acquired: task_id={}, range=[{}, {}]",
+        "任务已获取: task_id={}, 范围=[{}, {}]",
         task.task_id, task.start_id, task.end_id
     );
 
@@ -139,7 +139,7 @@ async fn run_worker_loop(
     }
 
     info!(
-        "Task completed: task_id={}, total_ids={}, valid_ids={}, elapsed={:.2}s, speed={} req/s",
+        "任务完成: task_id={}, 总ID数={}, 有效ID数={}, 耗时={:.2}s, 速度={} req/s",
         task.task_id,
         total_ids,
         valid_ids.len(),
@@ -180,13 +180,13 @@ async fn acquire_task(
     if !response.success {
         return Err(response
             .error
-            .unwrap_or_else(|| "Unknown error".to_string())
+            .unwrap_or_else(|| "未知错误".to_string())
             .into());
     }
 
     response
         .data
-        .ok_or_else(|| "No task data".into())
+        .ok_or_else(|| "没有任务数据".into())
 }
 
 /// 后台心跳循环
@@ -215,13 +215,13 @@ async fn heartbeat_loop(
         {
             Ok(resp) => {
                 if resp.status().is_success() {
-                    info!("Heartbeat sent for task {}", task_id);
+                    info!("任务 {} 的心跳已发送", task_id);
                 } else {
-                    warn!("Heartbeat failed: status={}", resp.status());
+                    warn!("心跳发送失败: status={}", resp.status());
                 }
             }
             Err(e) => {
-                warn!("Heartbeat request error: {}", e);
+                warn!("心跳请求错误: {}", e);
             }
         }
     }
@@ -268,7 +268,7 @@ async fn execute_task(
                 let app_id = format!("C{}", id);
                 let is_valid = get_app_data(&client, &app_id).await;
                 if is_valid {
-                    info!("Found valid ID: {}", id);
+                    info!("发现有效ID: {}", id);
                     Some(id)
                 } else {
                     None
@@ -306,10 +306,10 @@ async fn submit_result(
     if !response.success {
         return Err(response
             .error
-            .unwrap_or_else(|| "Unknown error".to_string())
+            .unwrap_or_else(|| "未知错误".to_string())
             .into());
     }
 
-    info!("Task {} submitted successfully", task_id);
+    info!("任务 {} 提交成功", task_id);
     Ok(())
 }
