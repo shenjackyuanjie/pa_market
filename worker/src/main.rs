@@ -5,12 +5,15 @@
 //! - 后台心跳保活
 //! - HTTP探测（并发控制）
 //! - 提交结果
+//! - 优雅退出（ctrl+c）
 
 use clap::Parser;
 use common::{
-    AcquireTaskRequest, AcquireTaskResponse, ApiResponse, HeartbeatRequest, SubmitResultRequest,
+    AcquireTaskRequest, AcquireTaskResponse, ApiResponse, HeartbeatRequest, ReleaseTaskRequest,
+    SubmitResultRequest,
 };
 use futures::StreamExt;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -53,6 +56,15 @@ struct WorkerState {
 
     /// HTTP客户端
     pub client: reqwest::Client,
+
+    /// 是否收到退出信号（第一次 ctrl+c）
+    pub shutdown_requested: Arc<AtomicBool>,
+
+    /// 是否需要强制退出（第二次 ctrl+c）
+    pub force_shutdown: Arc<AtomicBool>,
+
+    /// 当前正在执行的任务ID（0表示没有任务）
+    pub current_task_id: Arc<AtomicI32>,
 }
 
 #[tokio::main]
@@ -77,10 +89,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         worker_id: worker_id.clone(),
         current_speed: Arc::new(RwLock::new(config.initial_speed)),
         client: reqwest::Client::new(),
+        shutdown_requested: Arc::new(AtomicBool::new(false)),
+        force_shutdown: Arc::new(AtomicBool::new(false)),
+        current_task_id: Arc::new(AtomicI32::new(0)),
+    });
+
+    // 设置 ctrl+c 信号处理
+    let state_for_signal = Arc::clone(&state);
+    let config_for_signal = config.clone();
+    tokio::spawn(async move {
+        setup_signal_handler(&config_for_signal, &state_for_signal).await;
     });
 
     // 启动主循环
     loop {
+        // 检查是否收到退出信号
+        if state.shutdown_requested.load(Ordering::SeqCst) {
+            info!("收到退出信号，停止获取新任务");
+            break;
+        }
+
         match run_worker_loop(&config, &state).await {
             Ok(_) => {
                 info!("任务完成，等待下一个任务...");
@@ -95,6 +123,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    info!("Worker已优雅退出");
+    Ok(())
+}
+
+/// 设置信号处理器
+async fn setup_signal_handler(config: &Config, state: &Arc<WorkerState>) {
+    let mut first_signal = true;
+
+    loop {
+        tokio::signal::ctrl_c().await.expect("无法监听ctrl+c信号");
+
+        if first_signal {
+            first_signal = false;
+            info!("收到第一次 ctrl+c，准备优雅退出...");
+            info!("再次按 ctrl+c 将强制退出并释放当前任务");
+            state.shutdown_requested.store(true, Ordering::SeqCst);
+        } else {
+            warn!("收到第二次 ctrl+c，强制退出！");
+            state.force_shutdown.store(true, Ordering::SeqCst);
+
+            // 释放当前任务
+            let task_id = state.current_task_id.load(Ordering::SeqCst);
+            if task_id > 0 {
+                info!("正在释放任务 {}...", task_id);
+                if let Err(e) = release_task(config, state, task_id).await {
+                    error!("释放任务失败: {}", e);
+                } else {
+                    info!("任务 {} 已释放", task_id);
+                }
+            }
+
+            std::process::exit(1);
+        }
+    }
+}
+
+/// 向Master释放任务
+async fn release_task(
+    config: &Config,
+    state: &Arc<WorkerState>,
+    task_id: i32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let request = ReleaseTaskRequest {
+        task_id,
+        worker_id: state.worker_id.clone(),
+    };
+
+    let url = format!("{}/task/release", config.master_url);
+    let response: ApiResponse<String> = state
+        .client
+        .post(&url)
+        .json(&request)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    if !response.success {
+        return Err(response
+            .error
+            .unwrap_or_else(|| "未知错误".to_string())
+            .into());
+    }
+
+    Ok(())
 }
 
 /// Worker主循环
@@ -109,6 +204,9 @@ async fn run_worker_loop(
         task.task_id, task.start_id, task.end_id
     );
 
+    // 记录当前任务ID
+    state.current_task_id.store(task.task_id, Ordering::SeqCst);
+
     // 2. 启动后台心跳任务
     let heartbeat_handle = {
         let config = config.clone();
@@ -122,11 +220,16 @@ async fn run_worker_loop(
 
     // 3. 执行任务
     let start_time = Instant::now();
-    let valid_ids = execute_task(config, &state.client, &task).await?;
+    let valid_ids = execute_task(config, state, &task).await?;
     let elapsed = start_time.elapsed();
 
     // 4. 停止心跳任务
     heartbeat_handle.abort();
+
+    // 检查是否被强制退出
+    if state.force_shutdown.load(Ordering::SeqCst) {
+        return Err("强制退出".into());
+    }
 
     // 5. 计算并更新处理速度
     let total_ids = (task.end_id - task.start_id + 1) as u32;
@@ -152,6 +255,9 @@ async fn run_worker_loop(
 
     // 6. 提交结果
     submit_result(config, state, task.task_id, valid_ids).await?;
+
+    // 清除当前任务ID
+    state.current_task_id.store(0, Ordering::SeqCst);
 
     Ok(())
 }
@@ -276,16 +382,30 @@ pub async fn check_id(client: &reqwest::Client, id: i64) -> Option<bool> {
 /// 执行扫描任务
 async fn execute_task(
     config: &Config,
-    client: &reqwest::Client,
+    state: &Arc<WorkerState>,
     task: &AcquireTaskResponse,
 ) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
+    let client = &state.client;
+    let force_shutdown = Arc::clone(&state.force_shutdown);
+
     // 创建ID流
     let id_stream = futures::stream::iter(task.start_id..=task.end_id)
         .map(|id| {
             let client = client.clone();
+            let force_shutdown = Arc::clone(&force_shutdown);
             async move {
+                // 检查是否需要强制退出
+                if force_shutdown.load(Ordering::SeqCst) {
+                    return None;
+                }
+
                 // 重试逻辑：当 check_id 返回 None 时重试
                 loop {
+                    // 再次检查强制退出标志
+                    if force_shutdown.load(Ordering::SeqCst) {
+                        return None;
+                    }
+
                     match check_id(&client, id).await {
                         Some(true) => {
                             info!("发现有效ID: {}", id);

@@ -49,6 +49,16 @@ pub struct SubmitResultRequest {
     pub valid_ids: Vec<i64>,
 }
 
+/// Worker向Master释放任务的请求体（用于优雅退出）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseTaskRequest {
+    /// 任务ID
+    pub task_id: i32,
+
+    /// Worker的唯一标识符
+    pub worker_id: String,
+}
+
 /// Master向Worker返回的通用响应
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiResponse<T> {

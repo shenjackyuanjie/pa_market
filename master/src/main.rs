@@ -4,12 +4,14 @@
 //! - 状态管理和任务分发
 //! - 提供RESTful API供Worker调用
 //! - 智能任务分发算法（优先重试超时任务）
+//! - 支持Worker主动释放任务
 
 use axum::{extract::State, http::StatusCode, routing::post, Router};
 use chrono::Utc;
 use clap::Parser;
 use common::{
-    AcquireTaskRequest, AcquireTaskResponse, ApiResponse, HeartbeatRequest, SubmitResultRequest,
+    AcquireTaskRequest, AcquireTaskResponse, ApiResponse, HeartbeatRequest, ReleaseTaskRequest,
+    SubmitResultRequest,
 };
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -87,6 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/task/acquire", post(acquire_task))
         .route("/task/heartbeat", post(heartbeat))
         .route("/task/submit", post(submit_result))
+        .route("/task/release", post(release_task))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -346,6 +349,52 @@ async fn submit_result(
         StatusCode::OK,
         axum::Json(ApiResponse::success("任务提交成功".to_string())),
     )
+}
+
+/// 释放任务（Worker主动放弃任务）
+/// POST /task/release
+async fn release_task(
+    State(state): State<Arc<AppState>>,
+    axum::Json(req): axum::Json<ReleaseTaskRequest>,
+) -> (StatusCode, axum::Json<ApiResponse<String>>) {
+    info!(
+        "Worker {} 请求释放任务 {}",
+        req.worker_id, req.task_id
+    );
+
+    // 将任务的 last_heartbeat 设置为很早的时间，使其立即可被其他 worker 获取
+    let result = sqlx::query(
+        "UPDATE task_queue SET last_heartbeat = datetime('now', '-120 seconds') WHERE task_id = ? AND worker_id = ?"
+    )
+    .bind(req.task_id)
+    .bind(&req.worker_id)
+    .execute(&state.db_pool)
+    .await;
+
+    match result {
+        Ok(res) => {
+            if res.rows_affected() > 0 {
+                info!("任务 {} 已释放，可被其他Worker获取", req.task_id);
+                (
+                    StatusCode::OK,
+                    axum::Json(ApiResponse::success("任务已释放".to_string())),
+                )
+            } else {
+                warn!("任务 {} 不存在或Worker不匹配", req.task_id);
+                (
+                    StatusCode::NOT_FOUND,
+                    axum::Json(ApiResponse::error("任务不存在或Worker不匹配".to_string())),
+                )
+            }
+        }
+        Err(e) => {
+            error!("释放任务失败: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(ApiResponse::error(format!("数据库错误: {}", e))),
+            )
+        }
+    }
 }
 
 /// 计算batch_size（基于last_performance）
