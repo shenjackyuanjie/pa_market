@@ -29,11 +29,11 @@ struct Config {
     pub master_url: String,
 
     /// 初始处理速度（req/s）
-    #[arg(short = 's', long, default_value = "100")]
+    #[arg(short = 's', long, default_value = "20")]
     pub initial_speed: u32,
 
     /// HTTP并发数
-    #[arg(short = 'c', long, default_value = "50")]
+    #[arg(short = 'c', long, default_value = "5")]
     pub concurrency: usize,
 
     /// 心跳间隔（秒）
